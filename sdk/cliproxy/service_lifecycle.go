@@ -204,6 +204,14 @@ func (s *Service) Run(ctx context.Context) error {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
+		if s.cfg.CodexQuotaKeeperEnabled {
+			quotaInterval := time.Duration(s.cfg.CodexQuotaKeeperIntervalSeconds) * time.Second
+			if quotaInterval <= 0 {
+				quotaInterval = 30 * time.Minute
+			}
+			s.coreManager.StartQuotaKeeper(ctx, quotaInterval, s.cfg.CodexQuotaKeeperWarmupModel, s.cfg.CodexQuotaKeeperEndpoint)
+			log.Infof("Codex quota keeper started (interval=%s)", quotaInterval)
+		}
 	}
 
 	select {
@@ -227,6 +235,9 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) Shutdown(ctx context.Context) error {
 	if s == nil {
 		return nil
+	}
+	if s.coreManager != nil {
+		s.coreManager.StopQuotaKeeper()
 	}
 	var shutdownErr error
 	s.shutdownOnce.Do(func() {

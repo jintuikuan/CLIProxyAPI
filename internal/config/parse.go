@@ -28,6 +28,8 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
 	cfg.RedisUsageQueueRetentionSeconds = 60
+	cfg.CodexQuotaKeeperEnabled = true
+	cfg.CodexQuotaKeeperIntervalSeconds = 1800
 	cfg.DisableCooling = false
 	cfg.SaveCooldownStatus = false
 	cfg.TransientErrorCooldownSeconds = 0
@@ -86,6 +88,9 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 
 	if cfg.MaxRetryCredentials < 0 {
 		cfg.MaxRetryCredentials = 0
+	}
+	if cfg.CodexQuotaKeeperIntervalSeconds <= 0 {
+		cfg.CodexQuotaKeeperIntervalSeconds = 1800
 	}
 
 	cfg.NormalizePluginsConfig()

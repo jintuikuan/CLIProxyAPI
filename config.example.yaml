@@ -206,6 +206,13 @@ video-result-auth-cache-ttl: "3h"
 # When > 0, overrides the default worker count (16).
 # auth-auto-refresh-workers: 16
 
+# Periodically probe Codex OAuth usage and, when a full account has no active
+# 5-hour window, send one minimal conversation to start the window timer.
+codex-quota-keeper-enabled: true
+codex-quota-keeper-interval-seconds: 1800
+# codex-quota-keeper-endpoint: https://chatgpt.com/backend-api/wham/usage
+# codex-quota-keeper-warmup-model: gpt-5-codex
+
 # Quota exceeded behavior
 quota-exceeded:
   switch-project: true # Whether to automatically switch to another project when a quota is exceeded

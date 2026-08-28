@@ -76,6 +76,16 @@ type Config struct {
 	// When <= 0, the default worker count is used.
 	AuthAutoRefreshWorkers int `yaml:"auth-auto-refresh-workers" json:"auth-auto-refresh-workers"`
 
+	// CodexQuotaKeeperEnabled enables periodic Codex quota probing and one-shot
+	// warmup requests when a full account has not started its 5-hour window.
+	CodexQuotaKeeperEnabled bool `yaml:"codex-quota-keeper-enabled" json:"codex-quota-keeper-enabled"`
+	// CodexQuotaKeeperIntervalSeconds controls the probe interval (default 1800s).
+	CodexQuotaKeeperIntervalSeconds int `yaml:"codex-quota-keeper-interval-seconds" json:"codex-quota-keeper-interval-seconds"`
+	// CodexQuotaKeeperEndpoint overrides the Codex wham usage endpoint (useful for proxies/tests).
+	CodexQuotaKeeperEndpoint string `yaml:"codex-quota-keeper-endpoint,omitempty" json:"codex-quota-keeper-endpoint,omitempty"`
+	// CodexQuotaKeeperWarmupModel selects the model used by the one-token warmup request.
+	CodexQuotaKeeperWarmupModel string `yaml:"codex-quota-keeper-warmup-model,omitempty" json:"codex-quota-keeper-warmup-model,omitempty"`
+
 	// RequestRetry defines the number of additional credential retry rounds after
 	// the first round has exhausted its eligible credentials.
 	RequestRetry int `yaml:"request-retry" json:"request-retry"`
