@@ -117,6 +117,9 @@ func Warmup(ctx context.Context, client *http.Client, endpoint, accessToken, acc
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://chatgpt.com")
+	req.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
+	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
