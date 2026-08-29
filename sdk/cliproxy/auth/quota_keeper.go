@@ -53,7 +53,9 @@ func (m *Manager) StopQuotaKeeper() {
 func (m *Manager) quotaKeeperLoop(ctx context.Context, interval time.Duration, model, endpoint string) {
 	log.Infof("Codex quota keeper running (interval=%s)", interval)
 	probe := func() {
-		for _, auth := range m.List() {
+		auths := m.List()
+		log.Infof("Codex quota keeper probing %d auth entries", len(auths))
+		for _, auth := range auths {
 			if auth == nil || auth.Disabled {
 				continue
 			}
@@ -61,6 +63,7 @@ func (m *Manager) quotaKeeperLoop(ctx context.Context, interval time.Duration, m
 			if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && !strings.EqualFold(strings.TrimSpace(typeValue), "codex") {
 				continue
 			}
+			log.WithField("auth_id", auth.ID).Info("Codex quota keeper probing account")
 			m.probeCodexQuota(ctx, auth, interval, model, endpoint)
 		}
 	}
@@ -99,6 +102,7 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 		log.WithError(err).WithField("auth_id", auth.ID).Warn("Codex quota probe failed")
 		return
 	}
+	log.WithFields(log.Fields{"auth_id": auth.ID, "used_percent": *snapshot.UsedPercent, "reset_at": snapshot.ResetAt}).Info("Codex quota probe succeeded")
 	now = time.Now().UTC()
 	if snapshot.UsedPercent == nil {
 		return
