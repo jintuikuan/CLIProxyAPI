@@ -12,6 +12,7 @@ import (
 
 const (
 	defaultQuotaKeeperInterval = 30 * time.Minute
+	quotaWindowDuration        = 5 * time.Hour
 	quotaResetMetadataKey      = "quota_keeper_5h_reset_at"
 	quotaWarmMetadataKey       = "quota_keeper_last_warm_at"
 )
@@ -78,7 +79,11 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 		model = "gpt-5-codex"
 	}
 	now := time.Now().UTC()
-	if reset := metadataTime(auth.Metadata, quotaResetMetadataKey); reset.After(now) {
+	// A reset timestamp returned by wham/usage is also present for an account
+	// that has not made a request yet. Only trust it when this keeper has
+	// recorded a warmup, otherwise the first full-quota probe must warm the
+	// account to start the window.
+	if reset := metadataTime(auth.Metadata, quotaResetMetadataKey); reset.After(now) && !metadataTime(auth.Metadata, quotaWarmMetadataKey).IsZero() {
 		return
 	}
 	accessToken := quotaAuthAccessToken(auth)
@@ -89,11 +94,13 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 		return
 	}
 	now = time.Now().UTC()
-	if snapshot.ResetAt.After(now) {
-		m.persistQuotaMetadata(ctx, auth, snapshot.ResetAt, time.Time{})
+	if snapshot.UsedPercent == nil {
 		return
 	}
-	if snapshot.UsedPercent == nil || *snapshot.UsedPercent > 0 {
+	if *snapshot.UsedPercent > 0 {
+		if snapshot.ResetAt.After(now) {
+			m.persistQuotaMetadata(ctx, auth, snapshot.ResetAt, time.Time{})
+		}
 		return
 	}
 	lastWarm := metadataTime(auth.Metadata, quotaWarmMetadataKey)
@@ -103,7 +110,11 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 	if err = internalcodex.Warmup(probeCtx, client, endpoint, accessToken, accountID, model); err != nil {
 		return
 	}
-	m.persistQuotaMetadata(ctx, auth, time.Time{}, now)
+	resetAt := snapshot.ResetAt
+	if !resetAt.After(now) {
+		resetAt = now.Add(quotaWindowDuration)
+	}
+	m.persistQuotaMetadata(ctx, auth, resetAt, now)
 	log.WithField("auth_id", auth.ID).Info("quota keeper warmed Codex 5-hour window")
 }
 
