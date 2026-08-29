@@ -12,7 +12,7 @@ import (
 )
 
 const defaultQuotaEndpoint = "https://chatgpt.com/backend-api/wham/usage"
-const defaultWarmupModel = "gpt-5-codex"
+const defaultWarmupModel = "gpt-5.4"
 
 // QuotaSnapshot is the subset of the wham usage response needed by the keeper.
 type QuotaSnapshot struct {
@@ -96,9 +96,11 @@ func Warmup(ctx context.Context, client *http.Client, endpoint, accessToken, acc
 		model = defaultWarmupModel
 	}
 	payload := map[string]any{
-		"model":  model,
-		"input":  []map[string]any{{"role": "user", "content": []map[string]string{{"type": "input_text", "text": "ping"}}}},
-		"stream": false,
+		"model": model,
+		"input": []map[string]any{{"role": "user", "content": []map[string]string{{"type": "input_text", "text": "ping"}}}},
+		// Codex ChatGPT accounts require streaming responses on this endpoint.
+		// The response body is discarded after the server accepts the request.
+		"stream": true,
 		"store":  false,
 	}
 	body, err := json.Marshal(payload)

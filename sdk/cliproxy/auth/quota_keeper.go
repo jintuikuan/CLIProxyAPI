@@ -76,7 +76,7 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if model == "" {
-		model = "gpt-5-codex"
+		model = "gpt-5.4"
 	}
 	now := time.Now().UTC()
 	// A reset timestamp returned by wham/usage is also present for an account
