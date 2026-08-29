@@ -82,7 +82,10 @@ func ProbeQuota(ctx context.Context, client *http.Client, endpoint, accessToken,
 	return snapshot, nil
 }
 
-// Warmup sends a minimal non-streaming conversation request to start the 5-hour window.
+// Warmup sends a minimal conversation request to start the 5-hour window.
+// Codex returns an SSE stream that may remain open while it waits for more
+// events, so a successful HTTP response is sufficient; callers must not wait
+// for EOF on the response body.
 func Warmup(ctx context.Context, client *http.Client, endpoint, accessToken, accountID, model string) error {
 	if client == nil {
 		client = http.DefaultClient
@@ -100,8 +103,9 @@ func Warmup(ctx context.Context, client *http.Client, endpoint, accessToken, acc
 		"input": []map[string]any{{"type": "message", "role": "user", "content": "ping"}},
 		// Codex ChatGPT accounts require streaming responses on this endpoint.
 		// The response body is discarded after the server accepts the request.
-		"stream": true,
-		"store":  false,
+		"stream":            true,
+		"store":             false,
+		"max_output_tokens": 1,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -124,8 +128,10 @@ func Warmup(ctx context.Context, client *http.Client, endpoint, accessToken, acc
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	// Do not drain the SSE stream: the upstream can keep it open indefinitely.
+	// Closing immediately after headers are received still records the request
+	// and starts the quota window, while avoiding a 30-second context timeout.
+	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("warmup conversation returned status %d", resp.StatusCode)
 	}
