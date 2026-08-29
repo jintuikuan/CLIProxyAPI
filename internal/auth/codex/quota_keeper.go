@@ -97,7 +97,7 @@ func Warmup(ctx context.Context, client *http.Client, endpoint, accessToken, acc
 	}
 	payload := map[string]any{
 		"model": model,
-		"input": []map[string]any{{"role": "user", "content": []map[string]string{{"type": "input_text", "text": "ping"}}}},
+		"input": []map[string]any{{"type": "message", "role": "user", "content": "ping"}},
 		// Codex ChatGPT accounts require streaming responses on this endpoint.
 		// The response body is discarded after the server accepts the request.
 		"stream": true,
