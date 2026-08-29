@@ -211,7 +211,7 @@ video-result-auth-cache-ttl: "3h"
 codex-quota-keeper-enabled: true
 codex-quota-keeper-interval-seconds: 1800
 # codex-quota-keeper-endpoint: https://chatgpt.com/backend-api/wham/usage
-# codex-quota-keeper-warmup-model: gpt-5-codex
+# codex-quota-keeper-warmup-model: gpt-5.4
 
 # Quota exceeded behavior
 quota-exceeded:
