@@ -51,9 +51,14 @@ func (m *Manager) StopQuotaKeeper() {
 }
 
 func (m *Manager) quotaKeeperLoop(ctx context.Context, interval time.Duration, model, endpoint string) {
+	log.Infof("Codex quota keeper running (interval=%s)", interval)
 	probe := func() {
 		for _, auth := range m.List() {
-			if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") || auth.Disabled {
+			if auth == nil || auth.Disabled {
+				continue
+			}
+			typeValue, _ := auth.Metadata["type"].(string)
+			if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && !strings.EqualFold(strings.TrimSpace(typeValue), "codex") {
 				continue
 			}
 			m.probeCodexQuota(ctx, auth, interval, model, endpoint)
@@ -91,6 +96,7 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 	client := &http.Client{Transport: m.roundTripperFor(auth)}
 	snapshot, err := internalcodex.ProbeQuota(probeCtx, client, endpoint, accessToken, accountID)
 	if err != nil {
+		log.WithError(err).WithField("auth_id", auth.ID).Warn("Codex quota probe failed")
 		return
 	}
 	now = time.Now().UTC()
@@ -108,6 +114,7 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth, interval time
 		return
 	}
 	if err = internalcodex.Warmup(probeCtx, client, endpoint, accessToken, accountID, model); err != nil {
+		log.WithError(err).WithField("auth_id", auth.ID).Warn("Codex quota warmup failed")
 		return
 	}
 	resetAt := snapshot.ResetAt
