@@ -1632,6 +1632,9 @@ func isResponsesCompactRequestFaultError(opts cliproxyexecutor.Options, err erro
 		return false
 	}
 	status := statusCodeFromError(err)
+	if clienterror.IsTransientReadBodyError(status, err) {
+		return false
+	}
 	if clienterror.IsRequestFault(status, err) {
 		return true
 	}
@@ -1877,6 +1880,9 @@ func isRequestInvalidError(err error) bool {
 		return false
 	}
 	status := statusCodeFromError(err)
+	if clienterror.IsTransientReadBodyError(status, err) {
+		return false
+	}
 	if clienterror.IsRequestFault(status, err) {
 		return true
 	}
@@ -1884,6 +1890,9 @@ func isRequestInvalidError(err error) bool {
 	if errors.As(err, &authErr) && authErr != nil && authErr.Message != "" {
 		// When authErr.Code is non-empty, Error() formats as "Code: Message" which
 		// breaks JSON parsing in clienterror. Re-evaluate against the raw Message body.
+		if clienterror.IsTransientReadBodyError(status, errors.New(authErr.Message)) {
+			return false
+		}
 		if clienterror.IsRequestFault(status, errors.New(authErr.Message)) {
 			return true
 		}

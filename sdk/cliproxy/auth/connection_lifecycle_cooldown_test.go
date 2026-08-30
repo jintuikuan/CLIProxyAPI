@@ -246,6 +246,26 @@ func TestResultErrorFromError_ConnectionLifecycleDoesNotBecomeRequestScoped(t *t
 	}
 }
 
+func TestReadBodyErrorRemainsEligibleForCredentialFallback(t *testing.T) {
+	err := &statusBearingError{
+		status: http.StatusBadRequest,
+		msg:    `{"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"read body"}}`,
+	}
+	if isRequestInvalidError(err) {
+		t.Fatal("transient HTTP 400 read body must not stop credential rotation")
+	}
+	resultErr := resultErrorFromError(err)
+	if resultErr == nil {
+		t.Fatal("resultErrorFromError returned nil")
+	}
+	if resultErr.IsRequestScoped() {
+		t.Fatalf("read body error classified as request-scoped: %#v", resultErr)
+	}
+	if shouldSkipCredentialCooldown(resultErr) {
+		t.Fatal("read body error should remain eligible for a short transient cooldown")
+	}
+}
+
 func TestIsConnectionLifecycleError_StatusBearingErrorsStayCoolable(t *testing.T) {
 	cases := []error{
 		&statusBearingError{status: http.StatusUnauthorized, msg: "unexpected EOF"},

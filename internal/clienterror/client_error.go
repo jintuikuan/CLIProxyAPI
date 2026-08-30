@@ -68,6 +68,39 @@ func HTTPStatusFromErrorOr(err error, fallback int) int {
 	return fallback
 }
 
+// IsTransientReadBodyError reports the narrowly scoped upstream gateway
+// failure seen when a large Responses request cannot be parsed by the
+// OpenAI-compatible backend. Some gateways return this as HTTP 400 with an
+// otherwise generic invalid_request_error envelope, even though the request
+// may succeed unchanged on a subsequent credential/connection.
+//
+// This must stay deliberately strict: only HTTP 400 and a valid JSON body
+// whose error message is exactly "read body" (ignoring case and surrounding
+// whitespace) qualify. Plain-text messages and other 400 errors remain normal
+// client request faults.
+func IsTransientReadBodyError(status int, err error) bool {
+	if err == nil {
+		return false
+	}
+	if status <= 0 {
+		status = HTTPStatusFromError(err)
+	}
+	if status != http.StatusBadRequest {
+		return false
+	}
+	body := strings.TrimSpace(err.Error())
+	if body == "" || !json.Valid([]byte(body)) {
+		return false
+	}
+	for _, path := range []string{"error.message", "response.error.message", "body.error.message"} {
+		message := strings.TrimSpace(gjson.Get(body, path).String())
+		if strings.EqualFold(message, "read body") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsRequestFault reports whether an upstream failure is caused by the request
 // and therefore must not rotate or penalize credentials.
 func IsRequestFault(status int, err error) bool {
@@ -90,6 +123,12 @@ func IsRequestFault(status int, err error) bool {
 	// type alongside the same generic code. Preserve that credential failure
 	// classification without weakening generic request-fault handling.
 	if status == http.StatusUnauthorized && hasAuthenticationErrorBody(err) {
+		return false
+	}
+	// A compatible gateway can misclassify a transient body parsing failure as
+	// HTTP 400/invalid_request_error. Keep this one exact envelope eligible for
+	// credential rotation; all other 400 errors remain request faults.
+	if IsTransientReadBodyError(status, err) {
 		return false
 	}
 	if hasRequestFaultBody(err) {

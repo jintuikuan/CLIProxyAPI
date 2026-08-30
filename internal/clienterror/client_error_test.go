@@ -140,6 +140,69 @@ func TestIsRequestFaultStructuredIdentifiers(t *testing.T) {
 	}
 }
 
+func TestIsTransientReadBodyError(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		err    error
+		want   bool
+	}{
+		{
+			name:   "canonical envelope",
+			status: http.StatusBadRequest,
+			err:    errors.New(`{"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"read body"}}`),
+			want:   true,
+		},
+		{
+			name:   "message whitespace and case",
+			status: http.StatusBadRequest,
+			err:    errors.New(`{"error":{"message":"  READ BODY  "}}`),
+			want:   true,
+		},
+		{
+			name: "status from error",
+			err:  statusError{status: http.StatusBadRequest, body: `{"error":{"message":"read body"}}`},
+			want: true,
+		},
+		{
+			name:   "wrong status",
+			status: http.StatusInternalServerError,
+			err:    errors.New(`{"error":{"message":"read body"}}`),
+		},
+		{
+			name:   "ordinary invalid request",
+			status: http.StatusBadRequest,
+			err:    errors.New(`{"error":{"code":"invalid_request_error","message":"invalid parameter"}}`),
+		},
+		{
+			name:   "plain text is not enough",
+			status: http.StatusBadRequest,
+			err:    errors.New("read body"),
+		},
+		{
+			name:   "malformed JSON",
+			status: http.StatusBadRequest,
+			err:    errors.New(`{"error":{"message":"read body"}`),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsTransientReadBodyError(tc.status, tc.err); got != tc.want {
+				t.Fatalf("IsTransientReadBodyError(%d, %v) = %t, want %t", tc.status, tc.err, got, tc.want)
+			}
+		})
+	}
+
+	readBody := errors.New(`{"error":{"message":"read body"}}`)
+	if IsRequestFault(http.StatusBadRequest, readBody) {
+		t.Fatal("HTTP 400 read body must remain eligible for credential rotation")
+	}
+	if !IsRequestFault(http.StatusBadRequest, errors.New(`{"error":{"message":"invalid parameter"}}`)) {
+		t.Fatal("ordinary HTTP 400 must remain a request fault")
+	}
+}
+
 func TestIsRequestFault(t *testing.T) {
 	tests := []struct {
 		name   string
