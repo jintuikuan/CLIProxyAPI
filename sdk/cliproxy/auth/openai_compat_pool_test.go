@@ -562,6 +562,74 @@ func TestManagerExecuteStream_OpenAICompatAliasPoolFallsBackBeforeFirstByte(t *t
 	}
 }
 
+func TestManagerExecute_OpenAICompatAliasPoolFallsBackOnTransientReadBody(t *testing.T) {
+	alias := "claude-opus-4.66"
+	readBodyErr := &Error{
+		HTTPStatus: http.StatusBadRequest,
+		Message:    `{"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"read body"}}`,
+	}
+	executor := &openAICompatPoolExecutor{
+		id:            openAICompatPoolProviderKey,
+		executeErrors: map[string]error{"deepseek-v3.1": readBodyErr},
+	}
+	m := newOpenAICompatPoolTestManager(t, alias, []internalconfig.OpenAICompatibilityModel{
+		{Name: "deepseek-v3.1", Alias: alias},
+		{Name: "glm-5", Alias: alias},
+	}, executor)
+
+	response, err := m.Execute(context.Background(), []string{openAICompatPoolProviderKey}, cliproxyexecutor.Request{Model: alias}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("execute error = %v, want fallback success", err)
+	}
+	if string(response.Payload) != "glm-5" {
+		t.Fatalf("payload = %q, want %q", string(response.Payload), "glm-5")
+	}
+	got := executor.ExecuteModels()
+	want := []string{"deepseek-v3.1", "glm-5"}
+	if len(got) != len(want) {
+		t.Fatalf("execute calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("execute call %d model = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestManagerExecuteStream_OpenAICompatAliasPoolFallsBackOnTransientReadBody(t *testing.T) {
+	alias := "claude-opus-4.66"
+	readBodyErr := &Error{
+		HTTPStatus: http.StatusBadRequest,
+		Message:    `{"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"read body"}}`,
+	}
+	executor := &openAICompatPoolExecutor{
+		id:                openAICompatPoolProviderKey,
+		streamFirstErrors: map[string]error{"deepseek-v3.1": readBodyErr},
+	}
+	m := newOpenAICompatPoolTestManager(t, alias, []internalconfig.OpenAICompatibilityModel{
+		{Name: "deepseek-v3.1", Alias: alias},
+		{Name: "glm-5", Alias: alias},
+	}, executor)
+
+	streamResult, err := m.ExecuteStream(context.Background(), []string{openAICompatPoolProviderKey}, cliproxyexecutor.Request{Model: alias}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("execute stream error = %v, want fallback success", err)
+	}
+	if got := readOpenAICompatStreamPayload(t, streamResult); got != "glm-5" {
+		t.Fatalf("payload = %q, want %q", got, "glm-5")
+	}
+	got := executor.StreamModels()
+	want := []string{"deepseek-v3.1", "glm-5"}
+	if len(got) != len(want) {
+		t.Fatalf("stream calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("stream call %d model = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestManagerExecuteStream_OpenAICompatAliasPoolStopsOnInvalidRequest(t *testing.T) {
 	alias := "claude-opus-4.66"
 	invalidErr := &Error{HTTPStatus: http.StatusUnprocessableEntity, Message: "unprocessable entity"}
