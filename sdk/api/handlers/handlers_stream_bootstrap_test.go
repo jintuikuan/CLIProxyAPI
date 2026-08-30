@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +29,29 @@ import (
 type failOnceStreamExecutor struct {
 	mu    sync.Mutex
 	calls int
+}
+
+type synchronousEOFStreamExecutor struct {
+	failOnceStreamExecutor
+	failures int
+}
+
+func (e *synchronousEOFStreamExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.mu.Lock()
+	e.calls++
+	call := e.calls
+	e.mu.Unlock()
+
+	if call <= e.failures {
+		return nil, fmt.Errorf("read response body: %w", io.ErrUnexpectedEOF)
+	}
+	chunks := make(chan coreexecutor.StreamChunk, 1)
+	chunks <- coreexecutor.StreamChunk{Payload: []byte("ok")}
+	close(chunks)
+	return &coreexecutor.StreamResult{
+		Headers: http.Header{"X-Upstream-Attempt": {fmt.Sprint(call)}},
+		Chunks:  chunks,
+	}, nil
 }
 
 func (e *failOnceStreamExecutor) Identifier() string { return "codex" }
@@ -327,6 +352,78 @@ func (e *authAwareStreamExecutor) AuthIDs() []string {
 	out := make([]string, len(e.authIDs))
 	copy(out, e.authIDs)
 	return out
+}
+
+func newSynchronousEOFTestHandler(t *testing.T, executor *synchronousEOFStreamExecutor, bootstrapRetries int) *BaseAPIHandler {
+	t.Helper()
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:       "sync-eof-auth",
+		Provider: executor.Identifier(),
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "sync-eof@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("manager.Register(auth): %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "sync-eof-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
+	return NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		PassthroughHeaders: true,
+		Streaming: sdkconfig.StreamingConfig{
+			BootstrapRetries: bootstrapRetries,
+		},
+	}, manager)
+}
+
+func TestExecuteStreamWithAuthManager_RetriesSynchronousReadBodyEOF(t *testing.T) {
+	executor := &synchronousEOFStreamExecutor{failures: 1}
+	handler := newSynchronousEOFTestHandler(t, executor, 1)
+
+	dataChan, upstreamHeaders, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "sync-eof-model", []byte(`{"model":"sync-eof-model"}`), "")
+	var payload []byte
+	for chunk := range dataChan {
+		payload = append(payload, chunk...)
+	}
+	for errMsg := range errChan {
+		if errMsg != nil {
+			t.Fatalf("unexpected stream error: %+v", errMsg)
+		}
+	}
+	if got := string(payload); got != "ok" {
+		t.Fatalf("payload = %q, want ok", got)
+	}
+	if calls := executor.Calls(); calls != 2 {
+		t.Fatalf("stream attempts = %d, want 2", calls)
+	}
+	if attempt := upstreamHeaders.Get("X-Upstream-Attempt"); attempt != "2" {
+		t.Fatalf("upstream attempt header = %q, want 2", attempt)
+	}
+}
+
+func TestExecuteStreamWithAuthManager_ExhaustsSynchronousReadBodyEOFRetries(t *testing.T) {
+	executor := &synchronousEOFStreamExecutor{failures: 4}
+	handler := newSynchronousEOFTestHandler(t, executor, 3)
+
+	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "sync-eof-model", []byte(`{"model":"sync-eof-model"}`), "")
+	for chunk := range dataChan {
+		t.Fatalf("unexpected payload: %q", chunk)
+	}
+	var gotErr error
+	for errMsg := range errChan {
+		if errMsg != nil {
+			gotErr = errMsg.Error
+		}
+	}
+	if calls := executor.Calls(); calls != 4 {
+		t.Fatalf("stream attempts = %d, want 4", calls)
+	}
+	if !errors.Is(gotErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("terminal error = %v, want wrapped io.ErrUnexpectedEOF", gotErr)
+	}
 }
 
 func TestExecuteStreamWithAuthManager_RetriesBeforeFirstByte(t *testing.T) {

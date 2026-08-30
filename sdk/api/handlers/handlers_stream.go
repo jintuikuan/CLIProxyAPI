@@ -3,7 +3,9 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
@@ -351,7 +353,26 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		close(errChan)
 		return nil, nil, errChan
 	}
+	maxBootstrapRetries := StreamingBootstrapRetries(h.Cfg)
+	maxSynchronousEOFRetries := maxBootstrapRetries
+	if maxSynchronousEOFRetries < 1 {
+		// A synchronous EOF means no StreamResult and therefore no downstream
+		// payload was committed. Recover once by default so a transient body read
+		// failure does not terminate an otherwise healthy terminal session.
+		maxSynchronousEOFRetries = 1
+	}
+	if h.AuthManager.HomeEnabled() {
+		maxBootstrapRetries = 0
+		maxSynchronousEOFRetries = 0
+	}
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
+	// An upstream websocket/HTTP stream can fail synchronously with EOF before
+	// returning a StreamResult. Feed that failure through the same bounded
+	// bootstrap retry state machine used for chunk-delivered errors.
+	if err != nil && maxSynchronousEOFRetries > 0 && synchronousBootstrapRetryEligible(err) {
+		streamResult = streamResultWithError(err)
+		err = nil
+	}
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
 		errMsg := executionErrorMessage(err)
@@ -533,22 +554,38 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		}
 	}
 
-	maxBootstrapRetries := StreamingBootstrapRetries(h.Cfg)
-	if h.AuthManager.HomeEnabled() {
-		maxBootstrapRetries = 0
-	}
 	for bootstrapRetries := 0; !streamCanceledBeforeRead; {
 		readInitialStreamChunks()
 		if streamCanceledBeforeRead || bootstrapErr != nil || bootstrapStreamErr == nil {
 			break
 		}
-		if bootstrapRetries >= maxBootstrapRetries || !bootstrapEligible(bootstrapStreamErr) {
+		attemptLimit := maxBootstrapRetries
+		if synchronousBootstrapRetryEligible(bootstrapStreamErr) && maxSynchronousEOFRetries > attemptLimit {
+			attemptLimit = maxSynchronousEOFRetries
+		}
+		if bootstrapRetries >= attemptLimit || !bootstrapEligible(bootstrapStreamErr) {
 			bootstrapErr = executionErrorMessage(bootstrapStreamErr)
 			break
 		}
 		bootstrapRetries++
 		retryResult, retryErr := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 		if retryErr != nil {
+			if bootstrapRetries < maxSynchronousEOFRetries && synchronousBootstrapRetryEligible(retryErr) {
+				// Normalize synchronous EOF into a synthetic chunk so the next
+				// iteration consumes it through the ordinary bootstrap path.
+				chunks = streamResultWithError(retryErr).Chunks
+				streamClosedBeforeRead = false
+				streamCanceledBeforeRead = false
+				bootstrapStreamErr = nil
+				bootstrapErr = nil
+				bootstrapPayload = nil
+				bootstrapChunkIndex = 0
+				bootstrapHistoryChunks = nil
+				if responseSSEValidator != nil {
+					responseSSEValidator = &sseJSONValidationState{}
+				}
+				continue
+			}
 			originalBootstrapErr := executionErrorMessage(bootstrapStreamErr)
 			if isAuthSelectionUnavailable(retryErr) && originalBootstrapErr.StatusCode >= http.StatusInternalServerError {
 				bootstrapErr = originalBootstrapErr
@@ -727,6 +764,20 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		}
 	}()
 	return dataChan, upstreamHeaders, errChan
+}
+
+func synchronousBootstrapRetryEligible(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func streamResultWithError(err error) *coreexecutor.StreamResult {
+	chunks := make(chan coreexecutor.StreamChunk, 1)
+	chunks <- coreexecutor.StreamChunk{Err: err}
+	close(chunks)
+	return &coreexecutor.StreamResult{Chunks: chunks}
 }
 
 type sseJSONValidationState struct {
