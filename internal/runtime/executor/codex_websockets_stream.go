@@ -333,7 +333,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 
 			if wsErr, ok := parseCodexWebsocketError(payload); ok {
 				if sess != nil {
-					e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
+					if codexTerminalErrorIsContextLength([]byte(wsErr.Error())) {
+						e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "upstream_error", wsErr)
+					} else {
+						e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
+					}
 					sess.clearActive(conn, readCh)
 					unlockStreamSession()
 				} else {
@@ -350,15 +354,15 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				return nil, wsErr
 			}
 			if streamErr, terminalBody, ok := codexTerminalFailureErr(payload); ok {
-				// A transient capacity rejection is retried on another credential, so the
-				// downstream websocket session must survive this upstream teardown. Notifying
-				// the disconnect here would close the client connection before the retry can
-				// deliver anything. Every other terminal failure is forwarded in-stream and
-				// legitimately terminates the session, so it keeps the notifying variant.
+				// Transient capacity failures are retried and context failures let the client
+				// compact/replay another turn. In both cases the downstream websocket must
+				// survive the upstream teardown; a disconnect notification would race the
+				// in-stream error and close the client connection first.
 				failoverPending := isCodexOverloadBootstrapFailure(terminalBody)
+				recoverableTurnFailure := failoverPending || codexTerminalErrorIsContextLength(terminalBody)
 				if sess != nil {
 					unlockStreamSession()
-					if failoverPending {
+					if recoverableTurnFailure {
 						e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "terminal_failure", streamErr)
 					} else {
 						e.invalidateUpstreamConn(sess, conn, "terminal_failure", streamErr)

@@ -2798,6 +2798,100 @@ func TestRecordPendingToolCallIDsFromPayloadDropsSatisfiedCalls(t *testing.T) {
 	}
 }
 
+func TestForwardResponsesWebsocketContextLengthKeepsConnectionAlive(t *testing.T) {
+	serverErrCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := responsesWebsocketUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = r
+		writer := newResponsesWebsocketWriter(conn)
+		data := make(chan []byte, 1)
+		errCh := make(chan *interfaces.ErrorMessage, 1)
+		errCh <- &interfaces.ErrorMessage{
+			StatusCode: http.StatusBadRequest,
+			Error:      errors.New(`{"error":{"code":"context_length_exceeded","message":"too long"}}`),
+		}
+		close(data)
+		close(errCh)
+
+		h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil))
+		_, _, _, errMsg, errForward := h.forwardResponsesWebsocket(
+			ctx,
+			writer,
+			func(...interface{}) {},
+			data,
+			errCh,
+			newInMemoryWebsocketTimelineLog(),
+			"context-session",
+		)
+		if errForward != nil {
+			serverErrCh <- fmt.Errorf("context error terminated websocket: %w", errForward)
+			return
+		}
+		if errMsg == nil {
+			serverErrCh <- errors.New("expected context error message")
+			return
+		}
+		// A second frame on the same socket proves that the terminal context error
+		// did not mark the downstream writer as closing.
+		if errWrite := writeResponsesWebsocketPayload(writer, nil, []byte(`{"type":"response.completed","response":{"id":"resp-next"}}`), time.Now()); errWrite != nil {
+			serverErrCh <- fmt.Errorf("write next turn: %w", errWrite)
+			return
+		}
+		serverErrCh <- nil
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, firstPayload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read context error: %v", err)
+	}
+	if got := gjson.GetBytes(firstPayload, "error.code").String(); got != "context_length_exceeded" {
+		t.Fatalf("first error code = %q, want context_length_exceeded: %s", got, firstPayload)
+	}
+	_, secondPayload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read next-turn frame after context error: %v", err)
+	}
+	if got := gjson.GetBytes(secondPayload, "type").String(); got != wsEventTypeCompleted {
+		t.Fatalf("next-turn event type = %q, want %q: %s", got, wsEventTypeCompleted, secondPayload)
+	}
+	if err := <-serverErrCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResponsesWebsocketContextLengthErrorCodePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "error code", body: `{"error":{"code":"context_length_exceeded"}}`},
+		{name: "top level code", body: `{"code":"context_too_large"}`},
+		{name: "response error code", body: `{"response":{"error":{"code":"context_length_exceeded"}}}`},
+		{name: "body error code", body: `{"body":{"error":{"code":"context_too_large"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !isResponsesWebsocketContextLengthError(nil, []byte(tc.body)) {
+				t.Fatalf("context error was not detected: %s", tc.body)
+			}
+		})
+	}
+}
+
 func TestForwardResponsesWebsocketLogsAttemptedResponseOnWriteFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

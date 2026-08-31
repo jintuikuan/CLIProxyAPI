@@ -238,6 +238,18 @@ func writeResponsesWebsocketTerminalError(
 		}
 	}
 
+	// Context exhaustion is a recoverable turn-level failure. Send the
+	// structured error as a normal websocket event but keep the downstream
+	// connection alive so the client can compact/replay its transcript on the
+	// next response.create. The upstream attempt is cancelled by the caller.
+	if isResponsesWebsocketContextLengthError(errMsg, payload) {
+		errWrite := writeResponsesWebsocketPayload(writer, wsTimelineLog, payload, time.Now())
+		if errWrite != nil {
+			return payload, false, errWrite
+		}
+		return payload, true, nil
+	}
+
 	wrote, errClose := writer.closeWithPayload(payload)
 	if wrote && wsTimelineLog != nil {
 		wsTimelineLog.Append("response", payload, time.Now())
@@ -246,6 +258,33 @@ func writeResponsesWebsocketTerminalError(
 		return payload, wrote, errClose
 	}
 	return payload, wrote, websocket.ErrCloseSent
+}
+
+func isResponsesWebsocketContextLengthError(errMsg *interfaces.ErrorMessage, payload []byte) bool {
+	for _, raw := range [][]byte{payload, errorMessageBody(errMsg)} {
+		if len(raw) == 0 {
+			continue
+		}
+		for _, path := range []string{
+			"error.code",
+			"code",
+			"response.error.code",
+			"body.error.code",
+		} {
+			code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(raw, path).String()))
+			if code == "context_length_exceeded" || code == "context_too_large" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func errorMessageBody(errMsg *interfaces.ErrorMessage) []byte {
+	if errMsg == nil || errMsg.Error == nil {
+		return nil
+	}
+	return []byte(strings.TrimSpace(errMsg.Error.Error()))
 }
 
 func shouldReplayResponsesWebsocketPinnedAuthFailure(errMsg *interfaces.ErrorMessage) bool {
@@ -272,6 +311,9 @@ func shouldReleaseResponsesWebsocketPinnedAuth(errMsg *interfaces.ErrorMessage) 
 		http.StatusGatewayTimeout:
 		return true
 	default:
+	}
+	if isResponsesWebsocketContextLengthError(errMsg, nil) {
+		return true
 	}
 	if errMsg.Error != nil {
 		msg := strings.ToLower(errMsg.Error.Error())
