@@ -2817,7 +2817,6 @@ func TestForwardResponsesWebsocketContextLengthKeepsConnectionAlive(t *testing.T
 			StatusCode: http.StatusBadRequest,
 			Error:      errors.New(`{"error":{"code":"context_length_exceeded","message":"too long"}}`),
 		}
-		close(data)
 		close(errCh)
 
 		h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil))
