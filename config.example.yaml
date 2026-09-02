@@ -233,9 +233,9 @@ routing:
   # An established binding outranks credential priority: once a session is bound, that
   # credential is kept even if a higher-priority credential recovers. Credential priority
   # still decides cold bindings, requests without a session, and post-failover rebinding.
-  session-affinity: false # default: false
+  session-affinity: true # keep each Codex/Responses task on one credential; automatic failover remains enabled
   # How long session-to-auth bindings are retained. Default: 1h
-  session-affinity-ttl: "1h"
+  session-affinity-ttl: "12h"
 
 # Codex provider behavior.
 codex:
